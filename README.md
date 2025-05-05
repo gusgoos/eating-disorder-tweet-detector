@@ -35,7 +35,7 @@ This project implements a machine learning pipeline to detect signs of eating di
 
 ---
 
-## 📈 Evaluation
+## Evaluation
 
 - **Cross-validation (Stratified K-Fold)**
 - **Metrics**: Accuracy, Precision, Recall, F1-Score, ROC AUC
@@ -46,7 +46,7 @@ This project implements a machine learning pipeline to detect signs of eating di
 
 ---
 
-## 🛠 Installation & Setup
+## Installation & Setup
 
 ### Requirements
 - Python 3.8+
