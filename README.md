@@ -57,3 +57,4 @@ This project implements a machine learning pipeline to detect signs of eating di
 ```bash
 pip install -r requirements.txt
 python -m nltk.downloader averaged_perceptron_tagger_eng omw-1.4
+python -m spacy download es_core_news_sm
