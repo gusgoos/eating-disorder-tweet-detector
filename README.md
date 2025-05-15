@@ -20,7 +20,7 @@ This project implements a machine learning pipeline to detect signs of eating di
 ### 1. BoW + Traditional Classifiers
 - Text preprocessed using hashtag splitting, lemmatization, emoji conversion
 - Vectorized with `CountVectorizer`
-- Augmented using `nlpaug` (synonym + word swaps)
+- Optional augmentation using `nlpaug` (synonym + word swaps)
 - Models: Logistic Regression, Random Forest, SVM (with hyperparameter tuning)
 
 ### 2. BETO (Transformers)
@@ -49,6 +49,8 @@ This project implements a machine learning pipeline to detect signs of eating di
 ## Installation & Setup
 
 ### Requirements
+> ⚠️ **IMPORTANT**: This project requires additional language resource downloads beyond `requirements.txt`. Please follow **all** steps below.
+
 - Python 3.8+
 - Ollama (for local LLaMA usage): https://ollama.com/
 - GPU recommended for BETO and data augmentation
