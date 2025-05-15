@@ -1,4 +1,3 @@
-import os
 import numpy as np
 import pytest
 import matplotlib.pyplot as plt
@@ -57,3 +56,60 @@ def test_llama_classify_tweet_generate(monkeypatch):
     monkeypatch.setattr(functions, "ollama_client", type(
         "D", (), {"generate": lambda self, **kw: {"response": "0 nope"}})())
     assert functions.llama_classify_tweet_generate("t") == 0
+
+
+def test_classify_all_tweets_parallel(monkeypatch):
+    # stub llama_classify_tweet_generate
+    monkeypatch.setattr(functions, "llama_classify_tweet_generate", lambda t: int(t))
+    out = functions.classify_all_tweets_parallel(["0", "1", "0"], max_workers=2)
+    assert out == [0, 1, 0]
+
+def test_evaluate_model_cv(tmp_path, monkeypatch):
+    # Use a tiny dataset and DummyClassifier
+    X = np.array([[0], [1], [0], [1]])
+    y = np.array([0, 1, 0, 1])
+    model = DummyClassifier()
+    param_grid = {"strategy": ["most_frequent"]}
+    # redirect save_dir
+    save_dir = tmp_path / "models"
+    # Run
+    functions.evaluate_model_cv(model, param_grid, X, y,
+                                model_name="Dummy", pipeline_name="pipe", cv=2,
+                                save_dir=str(save_dir))
+    # one result appended
+    assert len(functions.results_list) == 1
+    res = functions.results_list[0]
+    assert res["Pipeline"] == "pipe"
+    assert res["Model"] == "Dummy"
+    # model file exists
+    files = list(save_dir.glob("pipe_Dummy.joblib"))
+    assert len(files) == 1
+
+
+def test_plot_roc_curve_cv():
+    # simple binary dataset
+    X = np.array([[0], [1], [0], [1]])
+    y = np.array([0, 1, 0, 1])
+    # dummy model with predict_proba
+    class M:
+        def fit(self, X, y): pass
+        def predict_proba(self, X): 
+            # assign .2 to class 0, .8 to class 1
+            return np.tile([.2, .8], (len(X),1))
+    fig, ax = plt.subplots()
+    functions.plot_roc_curve_cv(M(), X, y, cv=2, ax=ax)
+    # expect at least one line plotted (excluding diagonal)
+    lines = ax.get_lines()
+    assert len(lines) >= 1  
+
+def test_plot_learning_curve_cv():
+    # tiny dataset and DummyClassifier
+    est = DummyClassifier(strategy="most_frequent")
+    X = np.array([[0], [1], [0], [1]])
+    y = np.array([0, 1, 0, 1])
+    fig, ax = plt.subplots()
+    functions.plot_learning_curve_cv(est, X, y, cv=2, ax=ax)
+    # train and val curves plotted
+    lines = ax.get_lines()
+    assert any(line.get_label() == "Train Mean" for line in lines)
+    assert any(line.get_label() == "Val Mean" for line in lines)
