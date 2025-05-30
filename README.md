@@ -51,7 +51,7 @@ This project implements a machine learning pipeline to detect signs of eating di
 ### Requirements
 > ⚠️ **IMPORTANT**: This project requires additional language resource downloads beyond `requirements.txt`. Please follow **all** steps below.
 
-- Python 3.8+
+- Python 3.11.5+
 - Ollama (for local LLaMA usage): https://ollama.com/
 - GPU recommended for BETO and data augmentation
 
