@@ -24,6 +24,7 @@ import nlpaug.augmenter.word as naw
 from ollama import Client
 import joblib
 from nltk.corpus import wordnet as wn
+from threading import Lock
 
 # === Inicialización de variables necesarias para funciones exportadas ===
 random_state = 1
@@ -76,7 +77,6 @@ class SpanishSynonymAug:
         return " ".join(new_words)
 syn_aug = SpanishSynonymAug(aug_p=0.3)
 swap_aug = naw.RandomWordAug(action="swap", aug_p=0.2)
-
 
 # Cliente de Ollama
 ollama_client = Client(host='http://localhost:11434')
@@ -207,6 +207,16 @@ def calculate_uppercase_ratio(text, verbose=False):
     if verbose:
         print(f"Ratio de mayúsculas calculado: {ratio:.2f}")
     return ratio
+
+
+def get_spanish_synonyms(word):
+    synonyms = set()
+    for synset in wn.synsets(word, lang='spa'):
+        for lemma in synset.lemmas('spa'):
+            synonym = lemma.name().replace("_", " ")
+            if synonym != word:
+                synonyms.add(synonym)
+    return list(synonyms)
 
 
 def generate_augmented_bow_data(X_texts, y_labels, augment_factor=1):
@@ -384,59 +394,65 @@ def evaluate_model_cv(model, param_grid, X, y, model_name, pipeline_name, cv=5, 
 
 def classify_with_ollama_model_contextual(
     df, model_name, prob_column_name=None, csv_cache_path=None,
-    max_workers=4, k_context_reset=5, verbose=False
+    max_workers=4, k_context_reset=5
 ):
+    # Generar nombres predeterminados si no se proporcionan
     safe_model_id = model_name.replace(':', '_').replace('-', '_')
     if prob_column_name is None:
         prob_column_name = f"{safe_model_id}_prob"
+        print(f"⚠️ No se proporcionó un nombre de columna. Usando: '{prob_column_name}'.")
+
     if csv_cache_path is None:
         csv_cache_path = f"{prob_column_name}_predictions.csv"
+        print(f"⚠️ No se proporcionó una ruta de caché. Usando: '{csv_cache_path}'.")
 
     client = Client(host='http://localhost:11434')
 
-    def classify_batch_contextual(batch_texts, start_idx):
+    def classify_batch_contextual(texts, progress_bar, lock):
         results = []
         messages = [{"role": "system", "content": base_prompt}]
         context_count = 0
 
-        for i, text in enumerate(batch_texts):
-            global_idx = start_idx + i
+        for text in texts:
             messages.append({"role": "user", "content": f"Tweet: '{text}'\nProbabilidad:"})
+
             try:
                 response = client.chat(model=model_name, messages=messages)
                 reply = response['message']['content'].strip()
                 match = re.search(r"\b([01](?:\.\d+)?)\b", reply)
                 prob = float(match.group(1)) if match else -1.0
-            except Exception:
+            except Exception as e:
+                print(f"❌ Error en inferencia: {e}")
                 prob = -1.0
 
             results.append(prob)
+
+            # Agregar respuesta del modelo para mantener el contexto
             messages.append({"role": "assistant", "content": str(prob)})
-
-            if verbose:
-                if prob == -1.0:
-                    print(f"[{global_idx}] ❌ Clasificación inválida")
-                    print(f"  Tweet   : {text}")
-                    print(f"  Respuesta: {reply}")
-                else:
-                    print(f"[{global_idx}] ✅ Clasificado: {prob}")
-
             context_count += 1
+
+            # Reiniciar el contexto cada k elementos
             if context_count >= k_context_reset:
-                if verbose:
-                    print(f"[{global_idx}] 🔁 Reinicio de contexto")
                 messages = [{"role": "system", "content": base_prompt}]
                 context_count = 0
+
+            # Actualizar el progreso por tweet
+            with lock:
+                progress_bar.update(1)
+
         return results
 
     def classify_all_multithread(texts):
         results = [None] * len(texts)
         chunk_size = (len(texts) + max_workers - 1) // max_workers
-        chunks = [(i, texts[i:i+chunk_size]) for i in range(0, len(texts), chunk_size)]
+        chunks = [(i, texts[i:i + chunk_size]) for i in range(0, len(texts), chunk_size)]
 
-        with ThreadPoolExecutor(max_workers=max_workers) as executor, tqdm(total=len(texts), desc="Clasificando tweets") as pbar:
+        progress_bar = tqdm(total=len(texts), desc=f"Clasificando con {model_name}", dynamic_ncols=True)
+        lock = Lock()
+
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
             futures = {
-                executor.submit(classify_batch_contextual, chunk, start_idx): start_idx
+                executor.submit(classify_batch_contextual, chunk, progress_bar, lock): start_idx
                 for start_idx, chunk in chunks
             }
 
@@ -444,20 +460,24 @@ def classify_with_ollama_model_contextual(
                 idx_start = futures[future]
                 try:
                     chunk_results = future.result()
-                    results[idx_start:idx_start+len(chunk_results)] = chunk_results
-                    pbar.update(len(chunk_results))
-                except Exception:
-                    results[idx_start:idx_start+chunk_size] = [-1.0] * chunk_size
-                    pbar.update(chunk_size)
+                    results[idx_start:idx_start + len(chunk_results)] = chunk_results
+                except Exception as e:
+                    print(f"❌ Error inesperado: {e}")
+                    results[idx_start:idx_start + chunk_size] = [-1.0] * chunk_size
 
+        progress_bar.close()
         return results
 
+    # Verifica si existe el archivo cacheado
     if os.path.exists(csv_cache_path):
+        print(f"📂 Archivo encontrado: {csv_cache_path}. Cargando predicciones...")
         df_pred = pd.read_csv(csv_cache_path)
         df[prob_column_name] = df_pred[prob_column_name]
     else:
+        print(f"Ejecutando modelo {model_name} con contexto persistente y reset cada {k_context_reset} tweets...")
         df[prob_column_name] = classify_all_multithread(df['tweet_text'].tolist())
         df[['tweet_id', prob_column_name]].to_csv(csv_cache_path, index=False)
+        print(f"✅ Predicciones guardadas en {csv_cache_path}.")
 
     return df
 
@@ -474,17 +494,13 @@ def grid_search_k_reset(
 
     scores = []
 
-    df_sample = df.sample(frac=0.2, random_state=random_state).reset_index(drop=True)
-    sampled_indices = df_sample.index
-    true_labels_sample = np.array(true_labels)[sampled_indices]
-
     for k in k_values:
         print(f"\n🔍 Probando k = {k}...")
 
         prob_column_name = f"{prob_column_prefix}_k{k}"
         csv_cache_path = os.path.join(cache_dir, f"{prob_column_name}.csv")
 
-        df_copy = df_sample.copy()
+        df_copy = df.copy()
         df_copy = classify_with_ollama_model_contextual(
             df_copy,
             model_name=model_name,
@@ -495,7 +511,7 @@ def grid_search_k_reset(
         )
 
         y_prob = df_copy[prob_column_name].values
-        y_true = true_labels_sample
+        y_true = true_labels
 
         # Filtrar predicciones inválidas
         valid_mask = y_prob != -1.0
@@ -514,7 +530,7 @@ def grid_search_k_reset(
                 score = 0.0
 
         scores.append((k, score))
-        print(f"✅ k={k}, {scoring_fn.__name__} = {score:.4f}")
+        print(f"k={k}, {scoring_fn.__name__} = {score:.4f}")
 
     best_k, best_score = max(scores, key=lambda x: x[1])
     print(f"\n🏆 Mejor valor de k: {best_k} con {scoring_fn.__name__} = {best_score:.4f}")
@@ -523,16 +539,6 @@ def grid_search_k_reset(
 
 
 def process_llm_broken_predictions(df_pred, prob_col, process_broken_prompt=-1):
-    """
-    Procesa las predicciones de un modelo LLM sobre el test set.
-    - df_pred: DataFrame con las predicciones.
-    - prob_col: nombre de la columna de probabilidades.
-    - process_broken_prompt: 
-        -1 para ignorar -1.0,
-         0 para reemplazar -1.0 por 0.0,
-         1 para reemplazar -1.0 por 1.0.
-    Devuelve (y_true, y_prob)
-    """
     if process_broken_prompt == -1:
         valid_mask = df_pred[prob_col] != -1.0
         y_true = df_pred.loc[valid_mask, "label_enc"].values
