@@ -1,0 +1,41 @@
+@startuml
+skinparam linetype ortho
+skinparam monochrome true
+skinparam defaultFontSize 12
+
+start
+
+:Import libraries;
+:Read data.csv;
+:Label encoding (LabelEncoder);
+
+split
+partition "BETO Pipeline" {
+:Preprocessing:\n--Convert emojis;
+:BETO embeddings:\n--Tokenization with BETO\n--Extract CLS vector\n--Scaling + SVF;
+:Training and evaluation with CV;
+}
+split again
+partition "BoW Pipeline" {
+:Preprocessing:\n--Convert emojis\n--Uppercase ratio\n--Split hashtags\n--Remove URLs, @s, numbers\n--Segmentation and lemmatization;
+:Vectorization with CountVectorizer;
+:Data augmentation with NLPaug (if applicable);
+:Training and evaluation with CV;
+}
+split again
+partition "LLaMA Pipeline" {
+:Define base prompt;
+:Validation to find best k (context reset);
+:Classification with ollama:\n--Parallelization with ThreadPool\n--Reset context every k tweets\n--Evaluate for each model;
+:Evaluate against true labels;
+}
+endsplit
+
+:Evaluation on test set;
+:Preprocessing BoW and BETO on test;
+:Predictions with models on test;
+:Calculate metrics on test (AUC, F1, etc);
+
+stop
+@enduml
+
